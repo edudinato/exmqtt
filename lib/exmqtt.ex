@@ -179,6 +179,8 @@ defmodule ExMQTT do
       opts: [{:msg_handler, handler_functions} | opts]
     }
 
+    Process.flag(:trap_exit, true)
+
     {:ok, state, {:continue, {:start_when, start_when}}}
   end
 
@@ -211,7 +213,7 @@ defmodule ExMQTT do
         %{reconnect: {initial_delay, max_delay}} = state
         delay = retry_delay(initial_delay, max_delay, attempt)
         Logger.debug("[ExMQTT] Unable to connect, retrying in #{delay} ms")
-        :timer.sleep(delay)
+        Process.sleep(delay)
         {:noreply, state, {:continue, {:connect, attempt + 1}}}
     end
   end
@@ -281,7 +283,7 @@ defmodule ExMQTT do
   end
 
   def handle_info({:disconnected, :shutdown, :ssl_closed}, state) do
-    Logger.warn("[ExMQTT] Disconnected - shutdown, :ssl_closed")
+    Logger.warning("[ExMQTT] Disconnected - shutdown, :ssl_closed")
     {:noreply, state}
   end
 
@@ -300,8 +302,22 @@ defmodule ExMQTT do
     end
   end
 
+  @impl true
+  def handle_info({:EXIT, _pid, reason}, state) do
+    Logger.error(
+      "ExMQTT is terminating. Reason: #{inspect(reason)}. State: #{inspect(state)}"
+    )
+
+    case reason do
+      {:shutdown, _} ->
+        :timer.sleep(5000)
+    end
+
+    {:stop, :normal, state}
+  end
+
   def handle_info(msg, state) do
-    Logger.warn("[ExMQTT] Unhandled message #{inspect(msg)}")
+    Logger.warning("[ExMQTT] Unhandled message #{inspect(msg)}")
     {:noreply, state}
   end
 
@@ -309,11 +325,9 @@ defmodule ExMQTT do
 
   @impl ExMQTT.DisconnectHandler
   def handle_disconnect({reason_code, properties}, _arg) do
-    Logger.warn(
+    Logger.warning(
       "[ExMQTT] Disconnect received: reason #{reason_code}, properties: #{inspect(properties)}"
     )
-
-    # Process.send_after(self(), {:reconnect, 0}, 500)
 
     :ok
   end
@@ -322,7 +336,7 @@ defmodule ExMQTT do
 
   @impl ExMQTT.MessageHandler
   def handle_message(_topic, _message, _arg) do
-    Logger.warn("[ExMQTT] Message received but no handler module defined")
+    Logger.warning("[ExMQTT] Message received but no handler module defined")
     :ok
   end
 
@@ -427,7 +441,7 @@ defmodule ExMQTT do
 
   defp retry_delay(initial_delay, max_delay, attempt) when attempt < 1000 do
     temp = min(max_delay, pow(initial_delay * 2, attempt))
-    temp / 2 + Enum.random([0, temp / 2])
+    (temp / 2 + Enum.random([0, temp / 2])) |> trunc()
   end
 
   defp retry_delay(_initial_delay, max_delay, _attempt) do
